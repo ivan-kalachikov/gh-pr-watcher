@@ -21,19 +21,32 @@
           </div>
           <p class="hint">
             Нужен токен только на чтение.
-            <a id="create-token" target="_blank" rel="noopener">Создать fine-grained токен</a>
-            с правами <code>Pull requests</code>, <code>Commit statuses</code>, <code>Checks</code> (Read-only).
-            Для публичных репозиториев выберите «Public repositories». Приватные репозитории организации
-            требуют, чтобы организация разрешала fine-grained токены. Подойдёт и classic-токен: без scope для
-            публичных репозиториев, <code>repo</code> для приватных.
+            <a id="create-token" target="_blank" rel="noopener">Создать fine-grained токен</a>.
+            Для публичных репозиториев в «Repository access» выберите <strong>Public repositories</strong>:
+            права выбирать не нужно, такой токен и так читает все публичные репозитории.
+            Для приватных выберите «Only select repositories» и дайте <code>Pull requests</code> и
+            <code>Commit statuses</code> на Read-only; организация должна разрешать fine-grained токены.
+            Подойдёт и classic-токен: без scope для публичных репозиториев, <code>repo</code> для приватных.
           </p>
           <p class="hint">Токен хранится только в этом профиле Chrome (<code>chrome.storage.local</code>) и уходит только на <code>api.github.com</code>.</p>
         </section>
 
         <section class="card">
-          <h2><label for="repos">Репозитории</label></h2>
-          <textarea id="repos" rows="6" spellcheck="false" placeholder="VirtoCommerce/vc-frontend&#10;VirtoCommerce/*"></textarea>
-          <p class="hint">По одному на строку: <code>owner/name</code>, ссылка на репозиторий или <code>owner/*</code> — все репозитории владельца. Строки с <code>#</code> игнорируются.</p>
+          <h2><label for="repo-search">Репозитории</label></h2>
+          <div class="chips" id="chips" aria-live="polite"></div>
+          <div class="search">
+            <span class="search__icon" data-icon="search"></span>
+            <input
+              id="repo-search"
+              type="search"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Найти репозиторий: vc-frontend, VirtoCommerce/…"
+              aria-controls="repo-list"
+            />
+          </div>
+          <ul class="picker" id="repo-list" aria-label="Репозитории"></ul>
+          <p class="hint" id="picker-status"></p>
         </section>
 
         <section class="card">

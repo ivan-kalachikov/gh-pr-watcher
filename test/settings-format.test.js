@@ -1,19 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseRepos, normalizeRepo, prMatchesRepo, withDefaults } from "../lib/settings.js";
+import { normalizeRepo, prMatchesRepo, withDefaults } from "../lib/settings.js";
 import { describeChange, plural } from "../lib/format.js";
 
-test("repos parse from names, URLs and wildcards", () => {
-  const { valid, invalid } = parseRepos(`
-    VirtoCommerce/vc-frontend
-    https://github.com/VirtoCommerce/vc-module-x.git
-    # comment
-    VirtoCommerce/*, virtocommerce/VC-FRONTEND
-    not a repo
-  `);
-  assert.deepEqual(valid, ["VirtoCommerce/vc-frontend", "VirtoCommerce/vc-module-x", "VirtoCommerce/*"]);
-  assert.deepEqual(invalid, ["not a repo"]);
+test("repos normalize from names, URLs and wildcards", () => {
+  assert.equal(normalizeRepo(" VirtoCommerce/vc-frontend "), "VirtoCommerce/vc-frontend");
+  assert.equal(normalizeRepo("https://github.com/VirtoCommerce/vc-module-x.git"), "VirtoCommerce/vc-module-x");
   assert.equal(normalizeRepo("https://github.com/o/r/pull/12"), "o/r");
+  assert.equal(normalizeRepo("VirtoCommerce/*"), "VirtoCommerce/*");
+  assert.equal(normalizeRepo("not a repo"), null);
+  assert.equal(normalizeRepo("vc-frontend"), null);
 });
 
 test("wildcard repo matches every repo of the owner", () => {
