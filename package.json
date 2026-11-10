@@ -1,0 +1,9 @@
+{
+  "name": "gh-pr-watcher",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "zip": "zip -r gh-pr-watcher.zip manifest.json background.js popup.* options.* lib icons"
+  }
+}

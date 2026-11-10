@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Настройки · GitHub PR Watcher</title>
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <h1><span class="logo" data-icon="pr"></span>GitHub PR Watcher</h1>
+      <p class="lead">Следит за вашими открытыми pull request'ами и сообщает о новых комментариях, апрувах и статусе CI.</p>
+
+      <form id="form" novalidate>
+        <section class="card">
+          <h2><label for="token">Токен GitHub</label></h2>
+          <div class="token">
+            <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" />
+            <button type="button" class="icon-button" id="toggle-token" title="Показать токен" data-icon="eye"></button>
+          </div>
+          <p class="hint">
+            Нужен токен только на чтение.
+            <a id="create-token" target="_blank" rel="noopener">Создать fine-grained токен</a>
+            с правами <code>Pull requests</code>, <code>Commit statuses</code>, <code>Checks</code> (Read-only).
+            Для публичных репозиториев выберите «Public repositories». Приватные репозитории организации
+            требуют, чтобы организация разрешала fine-grained токены. Подойдёт и classic-токен: без scope для
+            публичных репозиториев, <code>repo</code> для приватных.
+          </p>
+          <p class="hint">Токен хранится только в этом профиле Chrome (<code>chrome.storage.local</code>) и уходит только на <code>api.github.com</code>.</p>
+        </section>
+
+        <section class="card">
+          <h2><label for="repos">Репозитории</label></h2>
+          <textarea id="repos" rows="6" spellcheck="false" placeholder="VirtoCommerce/vc-frontend&#10;VirtoCommerce/*"></textarea>
+          <p class="hint">По одному на строку: <code>owner/name</code>, ссылка на репозиторий или <code>owner/*</code> — все репозитории владельца. Строки с <code>#</code> игнорируются.</p>
+        </section>
+
+        <section class="card">
+          <h2>Уведомлять о</h2>
+          <div class="checks">
+            <label><input type="checkbox" name="comments" /> новых комментариях</label>
+            <label><input type="checkbox" name="approvals" /> апрувах</label>
+            <label><input type="checkbox" name="changesRequested" /> запросах изменений</label>
+            <label><input type="checkbox" name="ciFailure" /> падении CI</label>
+            <label><input type="checkbox" name="ciSuccess" /> успешном CI</label>
+          </div>
+          <label class="single"><input type="checkbox" id="ignore-bots" /> Не учитывать комментарии ботов (SonarCloud, Dependabot…)</label>
+          <div class="row">
+            <label for="interval">Проверять каждые</label>
+            <select id="interval">
+              <option value="1">1 мин</option>
+              <option value="2">2 мин</option>
+              <option value="5">5 мин</option>
+              <option value="10">10 мин</option>
+              <option value="15">15 мин</option>
+              <option value="30">30 мин</option>
+            </select>
+          </div>
+        </section>
+
+        <div class="actions">
+          <button type="submit" class="button button--primary" id="save">Сохранить</button>
+          <button type="button" class="button" id="check">Проверить доступ</button>
+          <span class="msg" id="msg" role="status"></span>
+        </div>
+        <ul class="results" id="results" hidden></ul>
+      </form>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
