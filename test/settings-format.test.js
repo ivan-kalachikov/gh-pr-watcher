@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { normalizeRepo, prMatchesRepo, withDefaults } from "../lib/settings.js";
-import { describeChange, plural } from "../lib/format.js";
+import { describeChange, describeReviewRequest, plural } from "../lib/format.js";
 
 test("repos normalize from names, URLs and wildcards", () => {
   assert.equal(normalizeRepo(" VirtoCommerce/vc-frontend "), "VirtoCommerce/vc-frontend");
@@ -64,4 +64,19 @@ test("review and claude settings get defaults and merge partially", () => {
   });
   assert.deepEqual(withDefaults({ review: { repos: "x" } }).review.repos, []);
   assert.deepEqual(withDefaults({ claude: { folders: ["x"] } }).claude.folders, {});
+});
+
+test("review request notification titles like describeChange and names the kind", () => {
+  const pr = { repo: "o/vc-frontend", number: 5, title: "Fix cart", url: "pr-url", author: "bob" };
+  const first = describeReviewRequest({ pr, kind: "requested" });
+  assert.equal(first.title, "vc-frontend#5 · Fix cart");
+  assert.equal(first.message, "Ваше ревью запрошено · bob");
+  assert.equal(first.url, "pr-url");
+
+  const again = describeReviewRequest({ pr, kind: "rerequested" });
+  assert.equal(again.message, "Запрошено повторное ревью · bob");
+
+  const long = describeReviewRequest({ pr: { ...pr, title: "x".repeat(200) }, kind: "requested" });
+  assert.equal(long.title.length, 80);
+  assert.ok(long.title.endsWith("…"));
 });
