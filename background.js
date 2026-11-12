@@ -114,10 +114,12 @@ async function pollReview(settings, viewer, prev) {
   const scope = reposKey(settings.review);
   // A changed repo list or teams toggle rewrites the baseline silently.
   const baselined = prev.baselined && prev.reposKey === scope;
+  // Cached details were normalized under the old scope (includeTeams changes requestedAt).
+  const cache = prev.reposKey === scope ? prev.details : {};
   try {
     const list = await fetchReviewList(settings.token, viewer, settings.review);
     const items = [...new Map([...list.queue, ...list.waiting].map((item) => [item.key, item])).values()];
-    const stale = items.filter((item) => needsDetails(item, prev.details[item.key], now));
+    const stale = items.filter((item) => needsDetails(item, cache[item.key], now));
     const { nodes } = await fetchReviewDetails(
       settings.token,
       stale.map((item) => item.id),
@@ -132,8 +134,8 @@ async function pollReview(settings, viewer, prev) {
           pr: normalizeReviewPr(node, viewer, { includeTeams: settings.review.includeTeams }),
           fetchedAt: now,
         };
-      } else if (prev.details[item.key]) {
-        details[item.key] = prev.details[item.key];
+      } else if (cache[item.key]) {
+        details[item.key] = cache[item.key];
       }
     }
 
