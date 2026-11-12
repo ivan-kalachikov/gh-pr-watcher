@@ -6,12 +6,15 @@ import {
   normalizePullRequest,
   graphql,
   fetchPullRequests,
+  reviewPrefixes,
+  fetchReviewList,
+  fetchReviewDetails,
   GitHubError,
 } from "../lib/github.js";
 
 test("search queries stay under the length limit and cover every repo", () => {
   const repos = Array.from({ length: 20 }, (_, i) => `VirtoCommerce/vc-module-something-${i}`);
-  const queries = buildSearchQueries(repos, "ivan");
+  const queries = buildSearchQueries(repos, "is:pr is:open archived:false author:ivan");
   assert.ok(queries.length > 1);
   for (const q of queries) {
     assert.ok(q.length <= 256, `${q.length} chars`);
@@ -21,10 +24,10 @@ test("search queries stay under the length limit and cover every repo", () => {
 });
 
 test("owner wildcard becomes a user: qualifier", () => {
-  assert.deepEqual(buildSearchQueries(["acme/*", "x/y"], "me"), [
+  assert.deepEqual(buildSearchQueries(["acme/*", "x/y"], "is:pr is:open archived:false author:me"), [
     "is:pr is:open archived:false author:me user:acme repo:x/y",
   ]);
-  assert.deepEqual(buildSearchQueries([], "me"), []);
+  assert.deepEqual(buildSearchQueries([], "is:pr is:open archived:false author:me"), []);
 });
 
 test("query has one aliased search per chunk", () => {
@@ -125,4 +128,53 @@ test("fetchPullRequests merges chunks and dedupes PRs", async () => {
   assert.ok(Object.keys(sent.variables).length > 1);
   assert.equal(result.prs.length, 1);
   assert.equal(result.rateLimit.remaining, 99);
+});
+
+const reply = (data) => async () => ({
+  ok: true,
+  status: 200,
+  headers: new Headers(),
+  json: async () => ({ data }),
+});
+
+test("review prefixes switch between direct and team requests", () => {
+  assert.ok(reviewPrefixes("me", false).queue.includes("user-review-requested:me"));
+  const teams = reviewPrefixes("me", true).queue;
+  assert.ok(teams.includes("review-requested:me"));
+  assert.ok(!teams.includes("user-review-requested"));
+  assert.ok(reviewPrefixes("me", false).waiting.includes("reviewed-by:me -author:me"));
+});
+
+test("review list puts a PR in the queue only, never in both", async () => {
+  const pr = { id: "P1", number: 5, updatedAt: "2026-01-01T00:00:00Z", repository: { nameWithOwner: "o/r" } };
+  const fetchImpl = reply({
+    rateLimit: { cost: 1, remaining: 4999, resetAt: "x" },
+    q0: { nodes: [pr] },
+    w0: { nodes: [pr] },
+  });
+  const res = await fetchReviewList("t", "me", { repos: ["o/r"], includeTeams: false }, fetchImpl);
+  assert.equal(res.queue.length, 1);
+  assert.equal(res.waiting.length, 0);
+  assert.deepEqual(res.queue[0], { id: "P1", key: "o/r#5", updatedAt: "2026-01-01T00:00:00Z" });
+});
+
+test("review list skips the network when no review repos are set", async () => {
+  const fetchImpl = async () => {
+    throw new Error("network must not be called");
+  };
+  const res = await fetchReviewList("t", "me", { repos: [], includeTeams: false }, fetchImpl);
+  assert.deepEqual(res.queue, []);
+  assert.deepEqual(res.waiting, []);
+});
+
+test("details are fetched in batches of 20 ids", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push(JSON.parse(init.body).variables.ids);
+    return reply({ rateLimit: { cost: 1 }, nodes: [{ id: "x" }] })();
+  };
+  const ids = Array.from({ length: 45 }, (_, i) => `P${i}`);
+  const res = await fetchReviewDetails("t", ids, fetchImpl);
+  assert.deepEqual(calls.map((c) => c.length), [20, 20, 5]);
+  assert.equal(res.nodes.length, 3);
 });
