@@ -50,3 +50,17 @@ test("folderFor matches repo names case-insensitively", () => {
   assert.equal(folderFor({ "o/r": "/p" }, "o/other"), null);
   assert.equal(folderFor({}, "o/r"), null);
 });
+
+test("claudeLink never leaves a lone high surrogate at the cut", () => {
+  const link = claudeLink({ prompt: "x".repeat(13999) + "\u{1F600}more" });
+  const q = new URL(link.replace("claude://", "https://")).searchParams.get("q");
+  assert.ok(q.length <= MAX_PROMPT);
+  assert.ok(q.endsWith("x"));
+  assert.equal(q, "x".repeat(13999));
+});
+
+test("claudeLink treats a non-string prompt as empty", () => {
+  assert.equal(claudeLink({ prompt: undefined }), "claude://code/new?q=");
+  assert.equal(claudeLink({ prompt: null }), "claude://code/new?q=");
+  assert.equal(claudeLink({ prompt: 42 }), "claude://code/new?q=");
+});
