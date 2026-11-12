@@ -90,6 +90,21 @@ export function claudeLinkFor(settings, pr, kind = "review") {
   return claudeLink({ prompt: fillTemplate(template, pr), folder: folderFor(settings.claude.folders, pr.repo) });
 }
 
+/** «Мои PR» entries carry no author; the viewer is the author of their own PRs. */
+export function ownClaudeLink(settings, pr, viewer) {
+  return claudeLinkFor(settings, { ...pr, author: pr.author ?? viewer ?? "" }, "own");
+}
+
+/**
+ * What the status bar of the tab should show. A missing token or repo list is already explained
+ * by the empty state with its settings button, so the bar stays neutral instead of repeating it in red.
+ */
+export function reviewStatusSource(settings, reviewState) {
+  const rs = { ...EMPTY_REVIEW_STATE, ...reviewState };
+  if (!settings.token || !settings.review.repos.length) return { ...rs, lastError: null };
+  return rs;
+}
+
 const ownerOf = (repo) => String(repo ?? "").split("/")[0].toLowerCase();
 const tsOr = (iso, fallback) => {
   const t = Date.parse(iso);
@@ -185,12 +200,24 @@ export function badgesHtml(pr, lead) {
   return out.join("");
 }
 
-/** Grey line explaining a row's place under «Нужнее всего». */
+const TIER2_REASONS = ["уже хватает апрувов", "ждёт автора после запроса изменений"];
+const SMALL_REASON = "маленький";
+
+/**
+ * Grey line explaining a row's place under «Нужнее всего». It names only what the row does not
+ * already show: «ре-ревью» / «никто не смотрел» are badges and «ждёт …» is in the meta line.
+ */
 export function reasonText(item) {
-  if (!item.reasons?.length) return "";
-  const raised = item.reasons.length > 1 || !item.reasons[0].startsWith("ждёт");
-  const arrow = item.tier === 2 ? "↓ " : raised ? "↑ " : "";
-  return arrow + item.reasons.join(" · ");
+  const reasons = item.reasons ?? [];
+  const parts = [];
+  if (item.tier === 2) {
+    const why = reasons.find((r) => TIER2_REASONS.includes(r));
+    if (why) parts.push(why);
+  }
+  const small = item.pr ? ["XS", "S"].includes(sizeOf(item.pr)) : reasons.includes(SMALL_REASON);
+  if (small) parts.push(SMALL_REASON);
+  if (!parts.length) return "";
+  return `${item.tier === 2 ? "↓" : "↑"} ${parts.join(" · ")}`;
 }
 
 function sizeBadge(pr) {
@@ -208,13 +235,12 @@ function actionsHtml(pr) {
     </span>`;
 }
 
-const sep = `<span class="sep" aria-hidden="true">·</span>`;
-
-function rowHtml(pr, { metaTail, badges, reason }, view) {
+function rowHtml(pr, { metaTail, sub, badges, reason }, view) {
   return `<li class="rv" data-key="${esc(pr.key)}">
     <a class="rv__link" href="${esc(pr.url)}" data-review-url data-focus="open:${esc(pr.key)}" title="Открыть на GitHub">
       <span class="rv__head"><span class="rv__title">${esc(pr.title)}</span>${sizeBadge(pr)}</span>
-      <span class="rv__meta">${repoRef(pr.repo, pr.number, view.showOwner)}${pr.author ? `${sep}<span class="trunc">${esc(pr.author)}</span>` : ""}${sep}${metaTail}</span>
+      <span class="rv__meta"><span class="rv__parts">${repoRef(pr.repo, pr.number, view.showOwner)}${pr.author ? `<span class="trunc">${esc(pr.author)}</span>` : ""}${metaTail ?? ""}</span></span>
+      ${sub ? `<span class="rv__sub">${sub}</span>` : ""}
       ${badges ? `<span class="rv__badges">${badges}</span>` : ""}
       ${reason ? `<span class="rv__reason">${esc(reason)}</span>` : ""}
     </a>
@@ -239,8 +265,9 @@ const MY_REVIEW = {
 
 function waitingRowHtml(pr, view) {
   const what = MY_REVIEW[pr.myLastReviewState] ?? "ваше ревью";
-  const tail = `<span class="trunc">${esc(what)} ${esc(timeAgo(pr.myLastReviewAt, view.now))}</span>`;
-  return rowHtml(pr, { metaTail: tail, badges: badgesHtml(pr, "commits"), reason: "" }, view);
+  // On its own line, so repo, number and author never get cut off.
+  const sub = `${esc(what)} ${esc(timeAgo(pr.myLastReviewAt, view.now))}`;
+  return rowHtml(pr, { sub, badges: badgesHtml(pr, "commits"), reason: "" }, view);
 }
 
 function hiddenRowHtml(entry, view) {
@@ -539,7 +566,7 @@ export function bindReview(listEl, getContext, { toolbar, toast, render, reload 
     const link = e.target.closest("[data-review-url]");
     if (!link) return;
     e.preventDefault();
-    openLink(link, !(e.ctrlKey || e.metaKey || e.shiftKey));
+    openLink(link, !(e.ctrlKey || e.metaKey)); // same rule as «Мои PR»
   });
 
   listEl.addEventListener("auxclick", (e) => {

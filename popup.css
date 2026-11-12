@@ -656,13 +656,35 @@ body {
   color: var(--red);
 }
 
+/*
+ * Parts wrap whole instead of being cut (a part longer than a full line still gets an ellipsis).
+ * Every part starts with a "·" that hangs 14px to the left; the outer box clips it, so a line
+ * never begins with a separator.
+ */
 .rv__meta {
-  display: flex;
-  min-width: 0;
+  display: block;
   margin-top: 1px;
+  overflow: hidden;
   color: var(--fg-muted);
   font-size: 12px;
+}
+
+.rv__parts {
+  display: flex;
+  flex-wrap: wrap;
+  margin-left: -14px;
   white-space: nowrap;
+}
+
+.rv__parts > * {
+  min-width: 0;
+}
+
+.rv__parts > *::before {
+  content: "·";
+  display: inline-block;
+  width: 14px;
+  text-align: center;
 }
 
 .trunc {
@@ -671,13 +693,11 @@ body {
   text-overflow: ellipsis;
 }
 
-.sep {
-  flex: none;
-  padding: 0 5px;
-}
-
-.wait {
-  flex: none;
+.rv__sub {
+  display: block;
+  margin-top: 1px;
+  color: var(--fg-muted);
+  font-size: 12px;
 }
 
 .wait--warn {

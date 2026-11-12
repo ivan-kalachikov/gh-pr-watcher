@@ -3,7 +3,16 @@ import { withDefaults, prMatchesRepo } from "./lib/settings.js";
 import { unreadTotal, totalUnread } from "./lib/diff.js";
 import { timeAgo } from "./lib/format.js";
 import { EMPTY_REVIEW_STATE } from "./lib/review-state.js";
-import { esc, renderReview, bindReview, readReviewUi, reviewTabCount, effectiveIgnored, claudeLinkFor } from "./popup-review.js";
+import {
+  esc,
+  renderReview,
+  bindReview,
+  readReviewUi,
+  reviewTabCount,
+  effectiveIgnored,
+  ownClaudeLink,
+  reviewStatusSource,
+} from "./popup-review.js";
 
 const AUTO_REFRESH_AFTER_MS = 60_000;
 
@@ -273,7 +282,7 @@ function render() {
   renderTabs();
   if (tab === "review") {
     $("mark-all").hidden = true;
-    renderStatus(data.settings, data.reviewState);
+    renderStatus(data.settings, reviewStatusSource(data.settings, data.reviewState));
     renderReview(list, reviewContext());
   } else {
     $("toolbar").hidden = true;
@@ -332,7 +341,7 @@ document.addEventListener("click", (e) => {
   if (own) {
     const pr = data.state.prs[own.dataset.claudeOwn];
     if (!pr) return;
-    chrome.runtime.sendMessage({ type: "openClaude", url: claudeLinkFor(data.settings, pr, "own") });
+    chrome.runtime.sendMessage({ type: "openClaude", url: ownClaudeLink(data.settings, pr, data.state.viewer) });
     window.close();
     return;
   }

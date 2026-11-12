@@ -8,6 +8,8 @@ import {
   effectiveIgnored,
   reviewTabCount,
   claudeLinkFor,
+  ownClaudeLink,
+  reviewStatusSource,
   reviewView,
   badgesHtml,
   reasonText,
@@ -145,6 +147,31 @@ test("claudeLinkFor uses the review or own prompt and the repo folder", () => {
   assert.equal(claudeLinkFor(settings(), pr({ repo: "x/y" })).includes("folder="), false);
 });
 
+test("ownClaudeLink fills {author} with the viewer", () => {
+  const s = settings({ claude: { ownPrompt: "{author}: {url}" } });
+  const mine = { key: "o/r#3", repo: "o/r", number: 3, title: "T", url: "https://github.com/o/r/pull/3" };
+  assert.equal(ownClaudeLink(s, mine, "ivan"), `claude://code/new?q=${encodeURIComponent(`ivan: ${mine.url}`)}`);
+  assert.equal(ownClaudeLink(s, mine, null), `claude://code/new?q=${encodeURIComponent(`: ${mine.url}`)}`);
+});
+
+test("reviewStatusSource keeps the status bar neutral while the empty state explains the setup", () => {
+  const setup = { lastError: { kind: "setup", message: "Выберите репозитории для ревью в настройках" }, lastCheck: null };
+  assert.equal(reviewStatusSource(withDefaults({ token: "t" }), setup).lastError, null);
+  assert.equal(reviewStatusSource(withDefaults({ review: { repos: ["o/r"] } }), setup).lastError, null);
+  const auth = { lastError: { kind: "auth", message: "Токен отклонён" } };
+  assert.deepEqual(reviewStatusSource(settings(), auth).lastError, auth.lastError);
+});
+
+test("«Ждут автора» puts my last review on its own line so repo and author stay whole", () => {
+  const w = pr({ number: 42, author: "hedgehog", myLastReviewAt: hoursAgo(50), myLastReviewState: "CHANGES_REQUESTED" });
+  const html = reviewListHtml(view({ waiting: [w] }));
+  assert.match(html, /class="rv__sub">вы просили изменения 2 дня назад</);
+  const meta = html.match(/class="rv__meta">([\s\S]*?)<\/span><\/span>\s*<span class="rv__sub"/)?.[1] ?? "";
+  assert.match(meta, /r #42/);
+  assert.match(meta, /hedgehog/);
+  assert.doesNotMatch(meta, /вы просили/);
+});
+
 test("reviewView reports setup and loading states", () => {
   assert.equal(view({ s: withDefaults({ review: { repos: ["o/r"] } }) }).status, "no-token");
   assert.equal(view({ s: withDefaults({ token: "t" }) }).status, "no-repos");
@@ -223,11 +250,36 @@ test("badge tooltips escape logins", () => {
   assert.match(badgesHtml(pr({ approvedBy: ['x"><b>'] }), "kind"), /Апрув: x&quot;&gt;&lt;b&gt;/);
 });
 
-test("reasonText marks tiers with arrows", () => {
-  assert.equal(reasonText({ tier: 1, reasons: ["ре-ревью", "ждёт 4 д", "маленький"] }), "↑ ре-ревью · ждёт 4 д · маленький");
-  assert.equal(reasonText({ tier: 2, reasons: ["уже хватает апрувов"] }), "↓ уже хватает апрувов");
-  assert.equal(reasonText({ tier: 1, reasons: ["ждёт 3 ч"] }), "ждёт 3 ч");
+test("reasonText keeps only what the row does not already show", () => {
+  // «ре-ревью» / «никто не смотрел» are badges, «ждёт …» is in the meta line.
+  assert.equal(reasonText({ tier: 1, reasons: ["ре-ревью", "никто не смотрел", "маленький"] }), "↑ маленький");
+  assert.equal(reasonText({ tier: 1, reasons: ["ре-ревью", "ждёт 4 д"] }), "");
+  assert.equal(reasonText({ tier: 1, reasons: ["ждёт 3 ч"] }), "");
+  assert.equal(reasonText({ tier: 2, reasons: ["уже хватает апрувов", "ждёт 2 д"] }), "↓ уже хватает апрувов");
+  assert.equal(
+    reasonText({ tier: 2, reasons: ["ждёт автора после запроса изменений", "маленький", "ждёт 1 д"] }),
+    "↓ ждёт автора после запроса изменений · маленький",
+  );
   assert.equal(reasonText({ tier: 1, reasons: [] }), "");
+});
+
+test("reasonText reads «маленький» from the PR size, even when rankQueue cut it off", () => {
+  const big = pr({ additions: 400, deletions: 400 });
+  const tiny = pr({ additions: 1, deletions: 1, reviewDecision: "APPROVED" });
+  assert.equal(reasonText({ pr: big, tier: 1, reasons: ["ре-ревью", "никто не смотрел", "ждёт 2 д"] }), "");
+  assert.equal(
+    reasonText({ pr: tiny, tier: 2, reasons: ["уже хватает апрувов", "ре-ревью", "никто не смотрел"] }),
+    "↓ уже хватает апрувов · маленький",
+  );
+});
+
+test("queue rows under «need» never repeat badges or the wait time in the reason line", () => {
+  const p = pr({ reviewedByOthers: false, myLastReviewAt: hoursAgo(80), firstCommitAfterMyReview: hoursAgo(50) });
+  const html = reviewListHtml(view({ queue: [p] }));
+  const reason = html.match(/class="rv__reason">([^<]*)</)?.[1];
+  assert.equal(reason, "↑ маленький");
+  const big = reviewListHtml(view({ queue: [pr({ additions: 500, deletions: 0, reviewedByOthers: false })] }));
+  assert.doesNotMatch(big, /rv__reason/);
 });
 
 test("rows escape GitHub data and carry size, wait and reason", () => {
