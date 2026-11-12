@@ -2,19 +2,28 @@ import { icons } from "./lib/icons.js";
 import { withDefaults, prMatchesRepo } from "./lib/settings.js";
 import { unreadTotal, totalUnread } from "./lib/diff.js";
 import { timeAgo } from "./lib/format.js";
+import { EMPTY_REVIEW_STATE } from "./lib/review-state.js";
+import { esc, renderReview, bindReview, readReviewUi, reviewTabCount, effectiveIgnored, claudeLinkFor } from "./popup-review.js";
 
 const AUTO_REFRESH_AFTER_MS = 60_000;
 
 const $ = (id) => document.getElementById(id);
 
-const esc = (s) =>
-  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-
 for (const el of document.querySelectorAll("[data-icon]")) el.innerHTML = icons[el.dataset.icon];
 
 async function load() {
-  const { settings, state } = await chrome.storage.local.get(["settings", "state"]);
-  return { settings: withDefaults(settings), state: { prs: {}, ...state } };
+  const { settings, state, reviewState, reviewIgnored } = await chrome.storage.local.get([
+    "settings",
+    "state",
+    "reviewState",
+    "reviewIgnored",
+  ]);
+  return {
+    settings: withDefaults(settings),
+    state: { prs: {}, ...state },
+    reviewState: { ...EMPTY_REVIEW_STATE, ...reviewState },
+    ignored: reviewIgnored ?? {},
+  };
 }
 
 function groupByRepo(repos, prs) {
@@ -94,7 +103,7 @@ function renderPr(pr) {
   const meta = [`#${pr.number}`, pr.isDraft && "черновик", `обновлён ${timeAgo(pr.updatedAt)}`].filter(Boolean);
   const pillHtml = pills(pr.unread);
   return `<li class="${cls}">
-    <a class="pr__link" href="${esc(pr.url)}" data-key="${esc(pr.key)}" title="Открыть на GitHub">
+    <a class="pr__link" href="${esc(pr.url)}" data-key="${esc(pr.key)}" data-focus="open:${esc(pr.key)}" title="Открыть на GitHub">
       <span class="pr__state">${icons.pr}</span>
       <span class="pr__main">
         <span class="pr__title">${esc(pr.title)}</span>
@@ -105,6 +114,9 @@ function renderPr(pr) {
         ${pillHtml ? `<span class="pr__pills">${pillHtml}</span>` : ""}
       </span>
     </a>
+    <span class="row-actions row-actions--mine">
+      <button class="act" type="button" data-claude-own="${esc(pr.key)}" data-focus="claude:${esc(pr.key)}" title="Открыть в Claude" aria-label="Открыть #${esc(pr.number)} в Claude">${icons.claude}</button>
+    </span>
   </li>`;
 }
 
@@ -146,7 +158,7 @@ function repoSummary(prs) {
 function renderGroup({ repo, prs }, collapsed) {
   const [owner, name] = repo.split("/");
   return `<details class="repo" data-repo="${esc(repo)}" ${collapsed.has(repo) ? "" : "open"}>
-    <summary class="repo__head">
+    <summary class="repo__head" data-focus="repo:${esc(repo)}">
       <span class="repo__chevron">${icons.chevron}</span>
       <span class="repo__name"><span class="repo__owner">${esc(owner)} /</span> ${esc(name)}</span>
       <span class="repo__summary">${repoSummary(prs)}<span class="repo__n" title="Открытых PR">${prs.length}</span></span>
@@ -155,9 +167,9 @@ function renderGroup({ repo, prs }, collapsed) {
   </details>`;
 }
 
-function renderStatus(settings, state) {
+function renderStatus(settings, { lastError: error, lastCheck, rateLimit, viewer } = {}) {
   const el = $("status");
-  const error = state.lastError;
+  el.title = "";
   if (error) {
     const link = error.kind === "setup" || error.kind === "auth" ? ` <a href="#" data-open-options>Открыть настройки</a>` : "";
     el.className = "status status--error";
@@ -165,18 +177,14 @@ function renderStatus(settings, state) {
     return;
   }
   el.className = "status";
-  el.title = state.rateLimit ? `Осталось запросов к API: ${state.rateLimit.remaining}` : "";
-  const who = state.viewer ? ` · ${esc(state.viewer)}` : "";
-  el.innerHTML = `Проверено ${esc(timeAgo(state.lastCheck))}${who} · каждые ${settings.intervalMin} мин`;
+  el.title = rateLimit ? `Осталось запросов к API: ${rateLimit.remaining}` : "";
+  const who = viewer ? ` · ${esc(viewer)}` : "";
+  el.innerHTML = `Проверено ${esc(timeAgo(lastCheck))}${who} · каждые ${settings.intervalMin} мин`;
 }
 
-function render({ settings, state }) {
+function renderMine({ settings, state }) {
   renderStatus(settings, state);
-
-  const total = totalUnread(state.prs);
-  $("count").hidden = !total;
-  $("count").textContent = total > 99 ? "99+" : total;
-  $("mark-all").hidden = !total;
+  $("mark-all").hidden = !totalUnread(state.prs);
 
   const list = $("list");
   if (!settings.token || !settings.repos.length) {
@@ -198,6 +206,101 @@ function render({ settings, state }) {
   list.innerHTML = active.length
     ? active.map((g) => renderGroup(g, collapsed)).join("") + quietHtml
     : `<div class="empty"><p>Нет ваших открытых PR в отслеживаемых репозиториях.</p></div>${quietHtml}`;
+}
+
+// ---------- tabs ----------
+
+const TAB_KEY = "popupTab";
+const TABS = ["mine", "review"];
+
+function readTab() {
+  try {
+    const tab = localStorage.getItem(TAB_KEY);
+    return TABS.includes(tab) ? tab : "mine";
+  } catch {
+    return "mine";
+  }
+}
+
+function saveTab(tab) {
+  try {
+    localStorage.setItem(TAB_KEY, tab);
+  } catch {
+    // Without storage the popup simply opens on «Мои PR».
+  }
+}
+
+let data;
+let tab = readTab();
+let renderedTab = null;
+const scrollByTab = { mine: 0, review: 0 };
+const reviewUi = { ...readReviewUi(), overrides: new Map() };
+
+const reviewContext = () => ({
+  settings: data.settings,
+  reviewState: data.reviewState,
+  ignored: data.ignored,
+  ui: reviewUi,
+  toolbar: $("toolbar"),
+});
+
+function renderTabs() {
+  const total = totalUnread(data.state.prs);
+  $("count").hidden = !total;
+  $("count").textContent = total > 99 ? "99+" : total;
+
+  const queued = data.settings.review.repos.length
+    ? reviewTabCount(data.reviewState, effectiveIgnored(data.ignored, reviewUi.overrides, data.reviewState))
+    : 0;
+  $("review-count").hidden = !queued;
+  $("review-count").textContent = queued > 99 ? "99+" : queued;
+
+  for (const el of document.querySelectorAll("[data-tab]")) {
+    const selected = el.dataset.tab === tab;
+    el.setAttribute("aria-selected", String(selected));
+    el.tabIndex = selected ? 0 : -1;
+  }
+  $("list").setAttribute("aria-labelledby", `tab-${tab}`);
+}
+
+// Re-renders keep the scroll position and the focused control of the current tab.
+function render() {
+  const list = $("list");
+  if (renderedTab) scrollByTab[renderedTab] = list.scrollTop;
+  const sameTab = renderedTab === tab;
+  const focused = sameTab ? document.activeElement?.closest?.("[data-focus]")?.dataset.focus : null;
+
+  renderTabs();
+  if (tab === "review") {
+    $("mark-all").hidden = true;
+    renderStatus(data.settings, data.reviewState);
+    renderReview(list, reviewContext());
+  } else {
+    $("toolbar").hidden = true;
+    renderMine(data);
+  }
+  renderedTab = tab;
+  list.scrollTop = scrollByTab[tab];
+
+  if (focused) {
+    const el = [...document.querySelectorAll("[data-focus]")].find((n) => n.dataset.focus === focused);
+    el?.focus({ preventScroll: true });
+  }
+}
+
+async function reload() {
+  data = await load();
+  render();
+}
+
+function selectTab(next, { focus = false } = {}) {
+  if (!TABS.includes(next)) return;
+  if (next !== tab) {
+    tab = next;
+    saveTab(tab);
+    render();
+  }
+  if (focus) document.querySelector(`[data-tab="${tab}"]`)?.focus();
 }
 
 async function refresh() {
@@ -225,6 +328,14 @@ document.addEventListener("click", (e) => {
     window.close();
     return;
   }
+  const own = e.target.closest("[data-claude-own]");
+  if (own) {
+    const pr = data.state.prs[own.dataset.claudeOwn];
+    if (!pr) return;
+    chrome.runtime.sendMessage({ type: "openClaude", url: claudeLinkFor(data.settings, pr, "own") });
+    window.close();
+    return;
+  }
   const link = e.target.closest(".pr__link");
   if (!link) return;
   e.preventDefault();
@@ -242,7 +353,7 @@ document.addEventListener("auxclick", (e) => {
 $("list").addEventListener(
   "toggle",
   (e) => {
-    if (e.target.matches?.("details.repo")) saveCollapsed(e.target.dataset.repo, !e.target.open);
+    if (e.target.matches?.("details[data-repo]")) saveCollapsed(e.target.dataset.repo, !e.target.open);
   },
   true,
 );
@@ -254,11 +365,31 @@ $("settings").addEventListener("click", () => {
 });
 $("mark-all").addEventListener("click", () => chrome.runtime.sendMessage({ type: "markAllRead" }));
 
-chrome.storage.onChanged.addListener(async (_changes, area) => {
-  if (area === "local") render(await load());
+const tablist = document.querySelector("[role=tablist]");
+tablist.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-tab]");
+  if (el) selectTab(el.dataset.tab);
+});
+tablist.addEventListener("keydown", (e) => {
+  const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+  const jump = { Home: TABS[0], End: TABS.at(-1) }[e.key];
+  if (!step && !jump) return;
+  e.preventDefault();
+  const next = jump ?? TABS[(TABS.indexOf(tab) + step + TABS.length) % TABS.length];
+  selectTab(next, { focus: true });
 });
 
-const initial = await load();
-render(initial);
-const stale = !initial.state.lastCheck || Date.now() - new Date(initial.state.lastCheck).getTime() > AUTO_REFRESH_AFTER_MS;
-if (initial.settings.token && initial.settings.repos.length && stale) refresh();
+bindReview($("list"), reviewContext, { toolbar: $("toolbar"), toast: $("toast"), render, reload });
+
+chrome.storage.onChanged.addListener((_changes, area) => {
+  if (area === "local") reload();
+});
+
+data = await load();
+render();
+const lastChecks = [
+  data.settings.repos.length && data.state.lastCheck,
+  data.settings.review.repos.length && data.reviewState.lastCheck,
+].filter((v) => v !== 0 && v !== false);
+const stale = lastChecks.some((iso) => !iso || Date.now() - new Date(iso).getTime() > AUTO_REFRESH_AFTER_MS);
+if (data.settings.token && stale) refresh();

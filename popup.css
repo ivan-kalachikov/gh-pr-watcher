@@ -7,23 +7,93 @@ body {
 
 .bar {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 8px 8px 12px;
+  min-height: 44px;
+  padding: 0 8px 0 12px;
   border-bottom: 1px solid var(--border);
 }
 
 .bar__title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
+  gap: 4px;
+  min-width: 0;
 }
 
 .bar__logo {
   color: var(--green);
+}
+
+/* Underline tabs sitting on the header border. */
+.tabs {
+  display: flex;
+  align-self: stretch;
+  gap: 2px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  margin-bottom: -1px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab__inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+}
+
+.tab:hover {
+  color: var(--fg);
+}
+
+.tab:hover .tab__inner {
+  background: var(--bg-hover);
+}
+
+/* Same weight in both states, so switching tabs never shifts the header. */
+.tab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--fg);
+}
+
+.tab:focus-visible {
+  outline: none;
+}
+
+.tab:focus-visible .tab__inner {
+  outline: 2px solid var(--accent);
+}
+
+.tab__n {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--grey) 22%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.tab__n[hidden],
+.bar__count[hidden] {
+  display: none;
 }
 
 .bar__count {
@@ -33,12 +103,15 @@ body {
   background: var(--accent);
   color: #fff;
   font-size: 12px;
+  font-weight: 600;
   line-height: 20px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .bar__actions {
   display: flex;
+  align-items: center;
   gap: 2px;
 }
 
@@ -80,6 +153,114 @@ body {
 .list {
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* ---------- review toolbar: filter chips + sort ---------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar[hidden] {
+  display: none;
+}
+
+.chips {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.chip[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.chip__n {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip--zero .chip__n {
+  opacity: 0.55;
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The native select is stretched invisibly over a compact label, so the control is as wide as the chosen option. */
+.sort {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px 0 8px;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sort:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.sort:has(.sort__select:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sort__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sort .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.sort__select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  font: inherit;
+  cursor: pointer;
 }
 
 .repo + .repo {
@@ -184,7 +365,16 @@ body {
   text-decoration: none;
 }
 
-.pr__link:hover {
+.pr {
+  position: relative;
+}
+
+/* Room for the «Открыть в Claude» button that appears on hover. */
+.pr .pr__link {
+  padding-right: 36px;
+}
+
+.pr:hover > .pr__link {
   background: var(--bg-hover);
 }
 
@@ -327,4 +517,381 @@ body {
 
 .empty p {
   margin: 0 0 12px;
+}
+
+/* ---------- row actions (both tabs) ---------- */
+
+.row-actions {
+  position: absolute;
+  right: 6px;
+  bottom: 5px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+.row-actions--mine {
+  top: 0;
+  bottom: 0;
+  right: 4px;
+  align-items: center;
+}
+
+.pr:hover .row-actions,
+.pr:focus-within .row-actions,
+.rv:hover .row-actions,
+.rv:focus-within .row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.act:hover {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ---------- review queue ---------- */
+
+.queue {
+  margin: 0;
+  padding: 4px 4px 6px;
+  list-style: none;
+}
+
+.rv {
+  position: relative;
+}
+
+.rv__link {
+  display: block;
+  padding: 7px 8px 8px;
+  border-radius: var(--radius);
+  color: inherit;
+  text-decoration: none;
+}
+
+.rv:hover > .rv__link {
+  background: var(--bg-hover);
+}
+
+.rv__link:focus-visible {
+  outline-offset: -2px;
+}
+
+.rv__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.rv__title {
+  display: -webkit-box;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+/* The last line keeps clear of the action buttons. */
+.rv__link > :last-child:not(.rv__head) {
+  padding-right: 60px;
+}
+
+.size {
+  flex: none;
+  min-width: 26px;
+  margin-top: 1px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.size--XS,
+.size--S {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.size--M {
+  background: color-mix(in srgb, var(--grey) 18%, transparent);
+  color: var(--fg-muted);
+}
+
+.size--L {
+  background: var(--yellow-bg);
+  color: var(--yellow);
+}
+
+.size--XL {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.rv__meta {
+  display: flex;
+  min-width: 0;
+  margin-top: 1px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.trunc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sep {
+  flex: none;
+  padding: 0 5px;
+}
+
+.wait {
+  flex: none;
+}
+
+.wait--warn {
+  color: var(--yellow);
+  font-weight: 600;
+}
+
+.wait--late {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.rv__badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.pill--muted {
+  background: color-mix(in srgb, var(--grey) 16%, transparent);
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.pill--warn {
+  background: var(--yellow-bg);
+  color: var(--yellow);
+}
+
+.rv__reason {
+  display: block;
+  margin-top: 4px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 8px 2px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.divider__n {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.queue > .divider:first-child {
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 0;
+}
+
+/* ---------- sections «Ждут автора» / «Скрытые» ---------- */
+
+.section {
+  border-top: 1px solid var(--border);
+}
+
+.section__hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.hid {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius);
+}
+
+.hid:hover {
+  background: var(--bg-hover);
+}
+
+.hid__link {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 0 6px 8px;
+  border-radius: var(--radius);
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.hid__link:focus-visible {
+  outline-offset: -2px;
+}
+
+.hid__ref {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.hid__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.text-button {
+  flex: none;
+  height: 24px;
+  margin-right: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.text-button:hover {
+  background: var(--accent-bg);
+}
+
+.text-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.empty--done .icon {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 8px;
+  color: var(--green);
+}
+
+/* ---------- toast ---------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 14px;
+  border-radius: 18px;
+  background: var(--fg);
+  color: var(--bg);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
+  font-size: 13px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 8px);
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
+}
+
+.toast.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.toast__sep {
+  opacity: 0.5;
+}
+
+.toast__undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toast__undo:hover {
+  background: color-mix(in srgb, var(--bg) 16%, transparent);
+}
+
+.toast__undo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .row-actions {
+    transition: none;
+  }
 }

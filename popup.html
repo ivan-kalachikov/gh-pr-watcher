@@ -10,8 +10,14 @@
     <header class="bar">
       <div class="bar__title">
         <span class="bar__logo" data-icon="pr"></span>
-        <span>Мои PR</span>
-        <span class="bar__count" id="count" hidden></span>
+        <div class="tabs" role="tablist" aria-label="Разделы">
+          <button class="tab" type="button" role="tab" id="tab-mine" data-tab="mine" aria-controls="list" aria-selected="true">
+            <span class="tab__inner">Мои PR<span class="bar__count" id="count" title="Непрочитанное" hidden></span></span>
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-review" data-tab="review" aria-controls="list" aria-selected="false" tabindex="-1">
+            <span class="tab__inner">На ревью<span class="tab__n" id="review-count" title="Ждут вашего ревью" hidden></span></span>
+          </button>
+        </div>
       </div>
       <div class="bar__actions">
         <button class="icon-button" id="mark-all" title="Отметить всё прочитанным" hidden data-icon="checkAll"></button>
@@ -20,7 +26,9 @@
       </div>
     </header>
     <div class="status" id="status"></div>
-    <main class="list" id="list"></main>
+    <div class="toolbar" id="toolbar" hidden></div>
+    <main class="list" id="list" role="tabpanel"></main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script type="module" src="popup.js"></script>
   </body>
 </html>
