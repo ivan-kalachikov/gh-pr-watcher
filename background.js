@@ -1,7 +1,16 @@
 import { withDefaults } from "./lib/settings.js";
-import { fetchViewer, fetchPullRequests } from "./lib/github.js";
+import { fetchViewer, fetchPullRequests, fetchReviewList, fetchReviewDetails } from "./lib/github.js";
 import { diffPullRequests, markRead, markAllRead, totalUnread } from "./lib/diff.js";
-import { describeChange } from "./lib/format.js";
+import { describeChange, describeReviewRequest } from "./lib/format.js";
+import { normalizeReviewPr } from "./lib/review.js";
+import {
+  EMPTY_REVIEW_STATE,
+  needsDetails,
+  diffReviewQueue,
+  reposKey,
+  pruneIgnored,
+  assembleReviewLists,
+} from "./lib/review-state.js";
 
 const ALARM = "poll";
 const EMPTY_STATE = { prs: {}, viewer: null, lastCheck: null, lastError: null, rateLimit: null, warnings: [] };
@@ -19,6 +28,16 @@ async function getState() {
   return { ...EMPTY_STATE, ...state };
 }
 
+async function getReviewState() {
+  const { reviewState } = await chrome.storage.local.get("reviewState");
+  return { ...EMPTY_REVIEW_STATE, ...reviewState };
+}
+
+async function getReviewIgnored() {
+  const { reviewIgnored } = await chrome.storage.local.get("reviewIgnored");
+  return reviewIgnored ?? {};
+}
+
 async function setState(state) {
   await chrome.storage.local.set({ state });
   await updateBadge(state);
@@ -33,7 +52,11 @@ function serial(fn) {
 }
 
 async function updateBadge(state) {
-  const error = state.lastError;
+  const { review } = await getSettings();
+  // A review-only setup (no «Мои PR» repos, some review repos) is not an error worth a red "!".
+  const reviewOnly =
+    state.lastError?.kind === "setup" && state.lastError.message === SETUP_MINE && review.repos.length > 0;
+  const error = reviewOnly ? null : state.lastError;
   if (error && (error.kind === "auth" || error.kind === "setup")) {
     await chrome.action.setBadgeText({ text: "!" });
     await chrome.action.setBadgeBackgroundColor({ color: COLOR_ALERT });
@@ -62,35 +85,145 @@ async function notify(change) {
   });
 }
 
+async function notifyReview(change) {
+  const { title, message, url } = describeReviewRequest(change);
+  const id = `review:${change.pr.key}:${Date.now()}`;
+  // No read-mark key: opening a review request must not touch "Мои PR".
+  await chrome.storage.session.set({ [id]: { url } });
+  await chrome.notifications.create(id, {
+    type: "basic",
+    iconUrl: "icons/icon-128.png",
+    title,
+    message,
+    priority: 1,
+  });
+}
+
+const SETUP_MINE = "Добавьте репозитории в настройках";
+const SETUP_REVIEW = "Выберите репозитории для ревью в настройках";
+
+async function pollMine(settings, viewer, state) {
+  try {
+    const { prs, rateLimit, warnings } = await fetchPullRequests(settings.token, viewer, settings.repos);
+    const { prs: next, changes } = diffPullRequests(state.prs, prs, settings);
+    await setState({
+      prs: next,
+      viewer,
+      lastCheck: new Date().toISOString(),
+      lastError: null,
+      rateLimit,
+      warnings,
+    });
+    for (const change of changes) await notify(change);
+  } catch (e) {
+    await setState({ ...state, viewer, lastError: { kind: e.kind ?? "api", message: e.message } });
+  }
+}
+
+async function pollReview(settings, viewer, prev) {
+  const now = Date.now();
+  const scope = reposKey(settings.review);
+  // A changed repo list or teams toggle rewrites the baseline silently.
+  const baselined = prev.baselined && prev.reposKey === scope;
+  // Cached details were normalized under the old scope (includeTeams changes requestedAt).
+  const cache = prev.reposKey === scope ? prev.details : {};
+  try {
+    const list = await fetchReviewList(settings.token, viewer, settings.review);
+    const items = [...new Map([...list.queue, ...list.waiting].map((item) => [item.key, item])).values()];
+    const stale = items.filter((item) => needsDetails(item, cache[item.key], now));
+    const { nodes } = await fetchReviewDetails(
+      settings.token,
+      stale.map((item) => item.id),
+    );
+    const fresh = new Map(nodes.map((node) => [node.id, node]));
+
+    const details = {};
+    for (const item of items) {
+      const node = fresh.get(item.id);
+      if (node) {
+        details[item.key] = {
+          pr: normalizeReviewPr(node, viewer, { includeTeams: settings.review.includeTeams }),
+          fetchedAt: now,
+        };
+      } else if (cache[item.key]) {
+        details[item.key] = cache[item.key];
+      }
+    }
+
+    const { queue, waiting } = assembleReviewLists(list, details);
+
+    const { changes } = diffReviewQueue({ ...prev, baselined }, queue, settings);
+    const ignoredBefore = await getReviewIgnored();
+    // A capped search may have left hidden PRs out of the lists while they are still open.
+    const ignored = pruneIgnored(ignoredBefore, queue, waiting, { truncated: list.truncated });
+    if (Object.keys(ignored).length !== Object.keys(ignoredBefore).length) {
+      await chrome.storage.local.set({ reviewIgnored: ignored });
+    }
+
+    await chrome.storage.local.set({
+      reviewState: {
+        queue,
+        waiting,
+        details,
+        baselined: true,
+        reposKey: scope,
+        lastCheck: new Date().toISOString(),
+        lastError: null,
+      },
+    });
+    for (const change of changes) if (!ignored[change.pr.key]) await notifyReview(change);
+  } catch (e) {
+    await chrome.storage.local.set({ reviewState: { ...prev, lastError: { kind: e.kind ?? "api", message: e.message } } });
+  }
+}
+
 function poll() {
   return serial(async () => {
     const settings = await getSettings();
     const state = await getState();
-    const setupError = !settings.token
-      ? "Укажите токен в настройках"
-      : !settings.repos.length
-        ? "Добавьте репозитории в настройках"
-        : null;
-    if (setupError) {
-      await setState({ ...state, lastError: { kind: "setup", message: setupError } });
+    const review = await getReviewState();
+
+    if (!settings.token) {
+      const lastError = { kind: "setup", message: "Укажите токен в настройках" };
+      await setState({ ...state, lastError });
+      await chrome.storage.local.set({ reviewState: { ...review, lastError } });
       return;
     }
 
+    // Each half polls on its own: one half's error or empty setup never blocks the other.
+    let viewer;
     try {
-      const viewer = state.viewer ?? (await fetchViewer(settings.token));
-      const { prs, rateLimit, warnings } = await fetchPullRequests(settings.token, viewer, settings.repos);
-      const { prs: next, changes } = diffPullRequests(state.prs, prs, settings);
-      await setState({
-        prs: next,
-        viewer,
-        lastCheck: new Date().toISOString(),
-        lastError: null,
-        rateLimit,
-        warnings,
-      });
-      for (const change of changes) await notify(change);
+      viewer = state.viewer ?? (await fetchViewer(settings.token));
     } catch (e) {
-      await setState({ ...state, lastError: { kind: e.kind ?? "api", message: e.message } });
+      const lastError = { kind: e.kind ?? "api", message: e.message };
+      await setState({
+        ...state,
+        // An auth error outranks the empty-repos hint, so the badge keeps its "!".
+        lastError:
+          settings.repos.length || lastError.kind === "auth" ? lastError : { kind: "setup", message: SETUP_MINE },
+      });
+      await chrome.storage.local.set({
+        reviewState: {
+          ...review,
+          lastError: settings.review.repos.length ? lastError : { kind: "setup", message: SETUP_REVIEW },
+        },
+      });
+      return;
+    }
+
+    if (settings.repos.length) {
+      await pollMine(settings, viewer, state);
+    } else {
+      await setState({ ...state, viewer, lastError: { kind: "setup", message: SETUP_MINE } });
+    }
+
+    if (settings.review.repos.length) {
+      await pollReview(settings, viewer, review);
+    } else {
+      // Start over: re-adding the same repos later must baseline silently, not report every request since.
+      await chrome.storage.local.set({
+        reviewState: { ...EMPTY_REVIEW_STATE, lastError: { kind: "setup", message: SETUP_REVIEW } },
+      });
     }
   });
 }
@@ -107,6 +240,43 @@ function updateState(mutate) {
     const state = await getState();
     await setState({ ...state, prs: mutate(state.prs) });
   });
+}
+
+function setIgnored(mutate) {
+  return serial(async () => {
+    const reviewIgnored = mutate(await getReviewIgnored(), await getReviewState());
+    await chrome.storage.local.set({ reviewIgnored });
+  });
+}
+
+function ignoreReview(key) {
+  const now = new Date().toISOString();
+  return setIgnored((ignored, { queue, waiting }) => {
+    const pr = queue[key] ?? waiting[key];
+    if (!pr) return ignored;
+    const { title, url, repo, number } = pr;
+    return { ...ignored, [key]: { ignoredAt: now, title, url, repo, number } };
+  });
+}
+
+function unignoreReview(key) {
+  return setIgnored((ignored) => {
+    const { [key]: _removed, ...rest } = ignored;
+    return rest;
+  });
+}
+
+async function openReview(url, active = true) {
+  if (typeof url !== "string" || !url.startsWith("https://github.com/")) throw new Error("Недопустимая ссылка");
+  await chrome.tabs.create({ url, active });
+}
+
+async function openClaude(url) {
+  if (typeof url !== "string" || !url.startsWith("claude://")) throw new Error("Недопустимая ссылка");
+  // Navigating the current tab to an external scheme leaves no blank tab behind.
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id !== undefined) await chrome.tabs.update(tab.id, { url });
+  else await chrome.tabs.create({ url, active: false });
 }
 
 async function openPr(url, key, active = true) {
@@ -136,7 +306,10 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   const after = withDefaults(changes.settings.newValue);
   if (before.token !== after.token) {
     // Another account's PRs must be baselined again, not reported as new.
-    await serial(() => setState({ ...EMPTY_STATE }));
+    await serial(async () => {
+      await setState({ ...EMPTY_STATE });
+      await chrome.storage.local.set({ reviewState: { ...EMPTY_REVIEW_STATE }, reviewIgnored: {} });
+    });
   }
   if (before.intervalMin !== after.intervalMin) await scheduleAlarm();
   await poll();
@@ -156,6 +329,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     refresh: () => poll(),
     open: () => openPr(msg.url, msg.key, msg.active !== false),
     markAllRead: () => updateState(markAllRead),
+    ignore: () => ignoreReview(msg.key),
+    unignore: () => unignoreReview(msg.key),
+    unignoreAll: () => setIgnored(() => ({})),
+    openReview: () => openReview(msg.url, msg.active !== false),
+    openClaude: () => openClaude(msg.url),
   };
   const handler = handlers[msg?.type];
   if (!handler) return false;

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { normalizeRepo, prMatchesRepo, withDefaults } from "../lib/settings.js";
-import { describeChange, plural } from "../lib/format.js";
+import { describeChange, describeReviewRequest, plural } from "../lib/format.js";
 
 test("repos normalize from names, URLs and wildcards", () => {
   assert.equal(normalizeRepo(" VirtoCommerce/vc-frontend "), "VirtoCommerce/vc-frontend");
@@ -49,4 +49,39 @@ test("notification groups a PR's events and links the single comment", () => {
   const one = describeChange({ pr, events: [ev("9", "comment", "bob")], ci: null });
   assert.equal(one.message, "💬 1 новый комментарий: bob");
   assert.equal(one.url, "u/9");
+});
+
+test("review and claude settings get defaults and merge partially", () => {
+  const d = withDefaults({});
+  assert.deepEqual(d.review, { repos: [], includeTeams: false, notify: { requested: false, rerequested: false } });
+  assert.equal(d.claude.reviewPrompt, "Сделай ревью pull request {url}");
+  assert.equal(d.claude.ownPrompt, "Разбери комментарии ревьюеров в моём pull request {url} и предложи, что исправить");
+  assert.deepEqual(d.claude.folders, {});
+
+  assert.deepEqual(withDefaults({ review: { notify: { rerequested: true } } }).review.notify, {
+    requested: false,
+    rerequested: true,
+  });
+  assert.deepEqual(withDefaults({ review: { repos: "x" } }).review.repos, []);
+  assert.deepEqual(withDefaults({ claude: { folders: ["x"] } }).claude.folders, {});
+});
+
+test("review request notification titles like describeChange and names the kind", () => {
+  const pr = { repo: "o/vc-frontend", number: 5, title: "Fix cart", url: "pr-url", author: "bob" };
+  const first = describeReviewRequest({ pr, kind: "requested" });
+  assert.equal(first.title, "vc-frontend#5 · Fix cart");
+  assert.equal(first.message, "Ваше ревью запрошено · bob");
+  assert.equal(first.url, "pr-url");
+
+  const again = describeReviewRequest({ pr, kind: "rerequested" });
+  assert.equal(again.message, "Запрошено повторное ревью · bob");
+
+  const long = describeReviewRequest({ pr: { ...pr, title: "x".repeat(200) }, kind: "requested" });
+  assert.equal(long.title.length, 80);
+  assert.ok(long.title.endsWith("…"));
+});
+
+test("review request notification names a deleted author ghost", () => {
+  const pr = { repo: "o/r", number: 1, title: "t", url: "u", author: null };
+  assert.equal(describeReviewRequest({ pr, kind: "requested" }).message, "Ваше ревью запрошено · ghost");
 });
