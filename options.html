@@ -72,6 +72,75 @@
           </div>
         </section>
 
+        <section class="card">
+          <h2><label for="review-search">Репозитории для ревью</label></h2>
+          <p class="hint hint--top">Где искать pull request'ы, ожидающие вашего ревью, для вкладки «На ревью».</p>
+          <div class="chips" id="review-chips" aria-live="polite"></div>
+          <div class="search">
+            <span class="search__icon" data-icon="search"></span>
+            <input
+              id="review-search"
+              type="search"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Найти репозиторий: vc-frontend, VirtoCommerce/…"
+              aria-controls="review-list"
+            />
+          </div>
+          <ul class="picker" id="review-list" aria-label="Репозитории для ревью"></ul>
+          <p class="hint" id="review-status"></p>
+          <label class="single single--spaced"><input type="checkbox" id="review-teams" /> Учитывать запросы на мои команды</label>
+        </section>
+
+        <section class="card">
+          <h2>Уведомлять о ревью</h2>
+          <div class="checks checks--flush">
+            <label><input type="checkbox" id="review-notify-requested" /> новом запросе ревью</label>
+            <label><input type="checkbox" id="review-notify-rerequested" /> запросе ре-ревью</label>
+          </div>
+        </section>
+
+        <section class="card" id="hidden-card" hidden>
+          <div class="card__head">
+            <h2>Скрытые PR</h2>
+            <button type="button" class="link-button" id="unignore-all">Вернуть все</button>
+          </div>
+          <ul class="hidden-list" id="hidden-list"></ul>
+        </section>
+
+        <section class="card">
+          <h2>Открыть в Claude</h2>
+          <label class="field">
+            <span class="field__label">Промпт для ревью чужого PR</span>
+            <textarea id="prompt-review" rows="3" spellcheck="false"></textarea>
+          </label>
+          <label class="field">
+            <span class="field__label">Промпт для своего PR</span>
+            <textarea id="prompt-own" rows="3" spellcheck="false"></textarea>
+          </label>
+          <p class="hint">
+            Подстановки: <code>{url}</code>, <code>{title}</code>, <code>{repo}</code>, <code>{number}</code>, <code>{author}</code>.
+            Промпт только вставляется в поле ввода Claude, сам не отправляется.
+          </p>
+
+          <h3 class="subhead">Папки репозиториев</h3>
+          <p class="hint hint--top">
+            Необязательно. Если путь задан, Claude Desktop откроет сессию в этой папке (перед этим попросит подтвердить её).
+            Нужен абсолютный путь, например <code>/home/me/src/vc-frontend</code>.
+          </p>
+          <ul class="folders" id="folders"></ul>
+          <p class="hint" id="folders-empty">Выберите репозитории для ревью или своих PR выше, либо добавьте репозиторий вручную.</p>
+          <div class="folder-add">
+            <input id="folder-repo" type="text" autocomplete="off" spellcheck="false" placeholder="owner/name" aria-label="Добавить репозиторий вручную" />
+            <button type="button" class="button" id="folder-add">Добавить</button>
+          </div>
+          <p class="hint" id="folder-error" role="alert" hidden></p>
+          <p class="hint">
+            Без папки Claude Code откроет сессию в папке по умолчанию; ссылка на PR будет в промпте, так что ревью всё равно возможно через gh.
+          </p>
+          <p class="hint">При первом открытии Chrome спросит «Открыть Claude?» — отметьте «Всегда разрешать».</p>
+        </section>
+
         <div class="actions">
           <button type="submit" class="button button--primary" id="save">Сохранить</button>
           <button type="button" class="button" id="check">Проверить доступ</button>

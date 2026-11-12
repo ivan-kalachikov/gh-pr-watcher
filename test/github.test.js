@@ -9,6 +9,7 @@ import {
   reviewPrefixes,
   fetchReviewList,
   fetchReviewDetails,
+  fetchReviewRepoSuggestions,
   GitHubError,
 } from "../lib/github.js";
 
@@ -177,4 +178,24 @@ test("details are fetched in batches of 20 ids", async () => {
   const res = await fetchReviewDetails("t", ids, fetchImpl);
   assert.deepEqual(calls.map((c) => c.length), [20, 20, 5]);
   assert.equal(res.nodes.length, 3);
+});
+
+test("review repo suggestions use review-requested and reviewed-by searches", async () => {
+  let body;
+  const fetchImpl = async (_url, init) => {
+    body = JSON.parse(init.body).query;
+    return fakeFetch(200, {
+      data: {
+        viewer: { login: "me" },
+        open: { nodes: [{ repository: { nameWithOwner: "o/a" } }, null] },
+        recent: { nodes: [{ repository: { nameWithOwner: "o/b" } }] },
+      },
+    })();
+  };
+  const res = await fetchReviewRepoSuggestions("t", fetchImpl);
+  assert.ok(body.includes("is:pr is:open archived:false review-requested:@me"));
+  assert.ok(body.includes("is:pr reviewed-by:@me sort:updated-desc"));
+  assert.equal(res.viewer, "me");
+  assert.deepEqual(res.openRepos.map((r) => r.nameWithOwner), ["o/a"]);
+  assert.deepEqual(res.recentRepos.map((r) => r.nameWithOwner), ["o/b"]);
 });

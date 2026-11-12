@@ -1,11 +1,9 @@
 import { icons } from "./lib/icons.js";
-import { withDefaults } from "./lib/settings.js";
-import { fetchViewer, checkRepos, fetchRepoSuggestions, searchRepositories } from "./lib/github.js";
-import { buildSuggestions, buildRepoSearch, pickerItems, toggleRepo, repoItem } from "./lib/repos.js";
-import { plural } from "./lib/format.js";
+import { withDefaults, normalizeRepo, DEFAULT_SETTINGS } from "./lib/settings.js";
+import { fetchViewer, checkRepos, fetchRepoSuggestions, fetchReviewRepoSuggestions } from "./lib/github.js";
+import { createRepoPicker } from "./repo-picker.js";
 
 const NOTIFY_KEYS = ["comments", "approvals", "changesRequested", "ciFailure", "ciSuccess"];
-const SEARCH_DEBOUNCE_MS = 350;
 
 const TOKEN_URL = (() => {
   const params = new URLSearchParams({
@@ -27,14 +25,37 @@ const esc = (s) =>
 for (const el of document.querySelectorAll("[data-icon]")) el.innerHTML = icons[el.dataset.icon];
 $("create-token").href = TOKEN_URL;
 
-const picker = {
-  selected: [],
-  suggestions: [],
-  owners: [],
-  remote: [],
-  status: "",
-  loadedFor: null,
-};
+const unsaved = () => message("Есть несохранённые изменения", "");
+
+const myPicker = createRepoPicker({
+  chipsEl: $("chips"),
+  searchEl: $("repo-search"),
+  listEl: $("repo-list"),
+  statusEl: $("picker-status"),
+  loadSuggestions: fetchRepoSuggestions,
+  getToken: () => $("token").value.trim(),
+  onChange: () => {
+    unsaved();
+    renderFolders();
+  },
+});
+
+const reviewPicker = createRepoPicker({
+  chipsEl: $("review-chips"),
+  searchEl: $("review-search"),
+  listEl: $("review-list"),
+  statusEl: $("review-status"),
+  loadSuggestions: fetchReviewRepoSuggestions,
+  getToken: () => $("token").value.trim(),
+  texts: {
+    noToken: "Вставьте токен, чтобы увидеть репозитории, где у вас просили ревью. Точное имя owner/name можно ввести и без него.",
+    loading: "Загружаю репозитории, где у вас просили или делали ревью…",
+  },
+  onChange: () => {
+    unsaved();
+    renderFolders();
+  },
+});
 
 function message(text, kind = "") {
   $("msg").textContent = text;
@@ -42,172 +63,158 @@ function message(text, kind = "") {
 }
 
 function readForm() {
+  const folders = {};
+  for (const [repo, path] of Object.entries(folderState)) if (path.trim()) folders[repo] = path.trim();
   return {
     token: $("token").value.trim(),
-    repos: [...picker.selected],
+    repos: myPicker.getSelected(),
     intervalMin: Number($("interval").value),
     ignoreBots: $("ignore-bots").checked,
     notify: Object.fromEntries(NOTIFY_KEYS.map((k) => [k, form.elements[k].checked])),
+    review: {
+      repos: reviewPicker.getSelected(),
+      includeTeams: $("review-teams").checked,
+      notify: { requested: $("review-notify-requested").checked, rerequested: $("review-notify-rerequested").checked },
+    },
+    claude: {
+      reviewPrompt: $("prompt-review").value.trim() || DEFAULT_SETTINGS.claude.reviewPrompt,
+      ownPrompt: $("prompt-own").value.trim() || DEFAULT_SETTINGS.claude.ownPrompt,
+      folders,
+    },
   };
+}
+
+const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+const exactRepos = (ids) => ids.filter((id) => !id.endsWith("/*"));
+
+// Folder paths by repo id as typed; empty path means "no folder" and is dropped on save.
+let folderState = {};
+
+function folderRepos() {
+  const repos = [];
+  for (const id of [...exactRepos(reviewPicker.getSelected()), ...exactRepos(myPicker.getSelected()), ...Object.keys(folderState)]) {
+    if (!repos.some((r) => same(r, id))) repos.push(id);
+  }
+  return repos;
+}
+
+const folderKey = (repo) => Object.keys(folderState).find((k) => same(k, repo));
+
+function renderFolders() {
+  const repos = folderRepos();
+  const pickerIds = [...exactRepos(reviewPicker.getSelected()), ...exactRepos(myPicker.getSelected())];
+  $("folders").innerHTML = repos
+    .map((repo) => {
+      const key = folderKey(repo);
+      const removable = !pickerIds.some((id) => same(id, repo));
+      const [owner, name] = repo.split("/");
+      return `<li>
+        <span class="folders__repo" title="${esc(repo)}">${repoLabel(owner, name)}</span>
+        <input type="text" data-repo="${esc(repo)}" value="${esc(key ? folderState[key] : "")}" autocomplete="off" spellcheck="false"
+          placeholder="Без папки" aria-label="Папка для ${esc(repo)}" />
+        ${removable ? `<button type="button" class="chip__remove" data-remove-folder="${esc(repo)}" aria-label="Убрать ${esc(repo)}">${icons.x}</button>` : ""}
+      </li>`;
+    })
+    .join("");
+  $("folders-empty").hidden = repos.length > 0;
 }
 
 function repoLabel(owner, name) {
   return `<span class="repo-owner">${esc(owner)}/</span><span class="repo-name">${esc(name)}</span>`;
 }
 
-function renderChips() {
-  $("chips").innerHTML = picker.selected.length
-    ? picker.selected
-        .map((id) => {
-          const [owner, name] = id.split("/");
-          return `<span class="chip">${name === "*" ? `${repoLabel(owner, "")}<span class="chip__all">все</span>` : repoLabel(owner, name)}
-            <button type="button" class="chip__remove" data-remove="${esc(id)}" aria-label="Убрать ${esc(id)}">${icons.x}</button></span>`;
-        })
-        .join("")
-    : `<span class="chips__empty">Ничего не выбрано — отметьте репозитории в списке ниже</span>`;
-}
+$("folders").addEventListener("input", (e) => {
+  const input = e.target.closest("input[data-repo]");
+  if (!input) return;
+  folderState[folderKey(input.dataset.repo) ?? input.dataset.repo] = input.value;
+  unsaved();
+});
 
-function rowMeta(item) {
-  if (item.coveredBy) return `<span class="tag">входит в ${esc(item.coveredBy)}</span>`;
-  const tags = [];
-  if (item.wildcard) tags.push(`<span class="tag">все репозитории</span>`);
-  if (item.openPrs) {
-    const n = item.openPrs;
-    tags.push(`<span class="tag tag--accent">${n} ${plural(n, ["открытый PR", "открытых PR", "открытых PR"])}</span>`);
+$("folders").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-remove-folder]");
+  if (!btn) return;
+  delete folderState[folderKey(btn.dataset.removeFolder)];
+  renderFolders();
+  unsaved();
+});
+
+function addFolderRepo() {
+  const input = $("folder-repo");
+  const error = $("folder-error");
+  const repo = normalizeRepo(input.value);
+  if (!input.value.trim()) return;
+  if (!repo || repo.endsWith("/*")) {
+    error.textContent = "Нужно точное имя репозитория: owner/name";
+    error.hidden = false;
+    return;
   }
-  if (item.manual) tags.push(`<span class="tag">добавить вручную</span>`);
-  if (item.archived) tags.push(`<span class="tag">архив</span>`);
-  if (item.isPrivate) tags.push(`<span class="tag" title="Приватный">${icons.lock}</span>`);
-  return tags.join("");
+  error.hidden = true;
+  if (!folderRepos().some((r) => same(r, repo))) folderState[repo] = "";
+  input.value = "";
+  renderFolders();
+  const row = [...$("folders").querySelectorAll("input[data-repo]")].find((i) => same(i.dataset.repo, repo));
+  row?.focus();
 }
 
-function renderList() {
-  const query = $("repo-search").value;
-  const rows = pickerItems({ query, suggestions: picker.suggestions, remote: picker.remote, selected: picker.selected });
-  const firstRemote = rows.findIndex((r) => r.remote);
-  $("repo-list").innerHTML = rows
-    .map((item, i) => {
-      const header = i === firstRemote ? `<li class="picker__group">Поиск на GitHub</li>` : "";
-      const name = repoLabel(item.owner, item.name);
-      return `${header}<li>
-        <label class="picker__row${item.coveredBy ? " picker__row--covered" : ""}">
-          <input type="checkbox" value="${esc(item.id)}" ${item.checked ? "checked" : ""} ${item.coveredBy ? "disabled" : ""} />
-          <span class="picker__main">
-            <span class="picker__name">${name}</span>
-            ${item.description ? `<span class="picker__desc">${esc(item.description)}</span>` : ""}
-          </span>
-          <span class="picker__meta">${rowMeta(item)}</span>
-        </label>
+$("folder-add").addEventListener("click", addFolderRepo);
+$("folder-repo").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addFolderRepo();
+  }
+});
+$("folder-repo").addEventListener("input", () => ($("folder-error").hidden = true));
+
+// Hidden review PRs, kept live from storage.
+function renderHidden(ignored) {
+  const rows = Object.entries(ignored ?? {}).sort(([, a], [, b]) => (b.ignoredAt ?? 0) - (a.ignoredAt ?? 0));
+  $("hidden-card").hidden = rows.length === 0;
+  $("hidden-list").innerHTML = rows
+    .map(([key, pr]) => {
+      const url = typeof pr.url === "string" && pr.url.startsWith("https://github.com/") ? pr.url : null;
+      const label = `<span class="repo-owner">${esc(pr.repo)}#${esc(pr.number)}</span> ${esc(pr.title)}`;
+      return `<li>
+        ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener" title="${esc(pr.title)}">${label}</a>` : `<span>${label}</span>`}
+        <button type="button" class="link-button" data-unignore="${esc(key)}">Вернуть</button>
       </li>`;
     })
     .join("");
-  const empty = !rows.length;
-  $("picker-status").textContent = picker.status || (empty ? (query ? "Ничего не найдено" : "") : "");
 }
 
-function render() {
-  renderChips();
-  renderList();
-}
+$("hidden-list").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-unignore]");
+  if (btn) chrome.runtime.sendMessage({ type: "unignore", key: btn.dataset.unignore });
+});
+$("unignore-all").addEventListener("click", () => chrome.runtime.sendMessage({ type: "unignoreAll" }));
 
-function setStatus(text) {
-  picker.status = text;
-  render();
-}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.reviewIgnored) renderHidden(changes.reviewIgnored.newValue);
+});
 
-async function loadSuggestions() {
+function reloadPickers() {
   const token = $("token").value.trim();
-  if (!token) {
-    picker.suggestions = [];
-    picker.owners = [];
-    picker.loadedFor = null;
-    return setStatus("Вставьте токен, чтобы увидеть репозитории, где у вас есть PR. Точное имя owner/name можно ввести и без него.");
-  }
-  if (picker.loadedFor === token) return;
-  picker.loadedFor = token;
-  setStatus("Загружаю репозитории, где у вас есть PR…");
-  try {
-    const result = buildSuggestions(await fetchRepoSuggestions(token));
-    if (picker.loadedFor !== token) return;
-    picker.suggestions = result.items;
-    picker.owners = result.owners;
-    setStatus("");
-  } catch (e) {
-    picker.loadedFor = null;
-    setStatus(`Не удалось загрузить список: ${e.message}`);
-  }
+  return Promise.all([myPicker.reload(token), reviewPicker.reload(token)]);
 }
 
-let searchTimer;
-let searchSeq = 0;
-
-function scheduleSearch() {
-  clearTimeout(searchTimer);
-  picker.remote = [];
-  renderList();
-  const token = $("token").value.trim();
-  const search = buildRepoSearch($("repo-search").value, picker.owners);
-  if (!token || !search) {
-    if (picker.status.startsWith("Ищу")) setStatus("");
-    return;
-  }
-  searchTimer = setTimeout(async () => {
-    const seq = ++searchSeq;
-    setStatus("Ищу на GitHub…");
-    try {
-      const repos = await searchRepositories(token, search);
-      if (seq !== searchSeq) return;
-      picker.remote = repos.map((r) => repoItem(r));
-      setStatus("");
-    } catch (e) {
-      if (seq === searchSeq) setStatus(`Поиск не удался: ${e.message}`);
-    }
-  }, SEARCH_DEBOUNCE_MS);
-}
-
-function toggle(id) {
-  picker.selected = toggleRepo(picker.selected, id);
-  render();
-  message("Есть несохранённые изменения", "");
-}
-
-$("repo-list").addEventListener("change", (e) => {
-  if (e.target.matches('input[type="checkbox"]')) toggle(e.target.value);
-});
-
-$("chips").addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-remove]");
-  if (btn) toggle(btn.dataset.remove);
-});
-
-$("repo-search").addEventListener("input", () => {
-  renderList();
-  scheduleSearch();
-});
-
-$("repo-search").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    const first = $("repo-list").querySelector('input[type="checkbox"]:not(:checked):not(:disabled)');
-    if (first) toggle(first.value);
-  } else if (e.key === "ArrowDown") {
-    e.preventDefault();
-    $("repo-list").querySelector('input[type="checkbox"]:not(:disabled)')?.focus();
-  }
-});
-
-$("token").addEventListener("change", loadSuggestions);
-
+$("token").addEventListener("change", reloadPickers);
 async function fill() {
-  const { settings: stored } = await chrome.storage.local.get("settings");
+  const { settings: stored, reviewIgnored } = await chrome.storage.local.get(["settings", "reviewIgnored"]);
   const s = withDefaults(stored);
   $("token").value = s.token;
   $("interval").value = String(s.intervalMin);
   $("ignore-bots").checked = s.ignoreBots;
   for (const k of NOTIFY_KEYS) form.elements[k].checked = s.notify[k];
-  picker.selected = [...s.repos];
-  render();
-  await loadSuggestions();
+  myPicker.setSelected(s.repos);
+  reviewPicker.setSelected(s.review.repos);
+  $("review-teams").checked = s.review.includeTeams;
+  $("review-notify-requested").checked = s.review.notify.requested;
+  $("review-notify-rerequested").checked = s.review.notify.rerequested;
+  $("prompt-review").value = s.claude.reviewPrompt;
+  $("prompt-own").value = s.claude.ownPrompt;
+  folderState = { ...s.claude.folders };
+  renderFolders();
+  renderHidden(reviewIgnored);
+  await reloadPickers();
 }
 
 form.addEventListener("submit", async (e) => {
@@ -226,7 +233,9 @@ $("check").addEventListener("click", async () => {
   message("Проверяю…");
   try {
     const login = await fetchViewer(settings.token);
-    const repos = await checkRepos(settings.token, settings.repos);
+    const all = [...settings.repos];
+    for (const r of settings.review.repos) if (!all.some((x) => same(x, r))) all.push(r);
+    const repos = await checkRepos(settings.token, all);
     const rows = [
       `<li class="ok">${icons.check}токен принят, пользователь ${esc(login)}</li>`,
       ...Object.entries(repos).map(([repo, ok]) =>
