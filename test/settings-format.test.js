@@ -80,3 +80,8 @@ test("review request notification titles like describeChange and names the kind"
   assert.equal(long.title.length, 80);
   assert.ok(long.title.endsWith("…"));
 });
+
+test("review request notification names a deleted author ghost", () => {
+  const pr = { repo: "o/r", number: 1, title: "t", url: "u", author: null };
+  assert.equal(describeReviewRequest({ pr, kind: "requested" }).message, "Ваше ревью запрошено · ghost");
+});

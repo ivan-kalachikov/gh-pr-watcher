@@ -146,6 +146,42 @@ test("review prefixes switch between direct and team requests", () => {
   assert.ok(reviewPrefixes("me", false).waiting.includes("reviewed-by:me -author:me"));
 });
 
+test("review prefixes sort by update time so a capped result is the most recent window", () => {
+  for (const teams of [false, true]) {
+    const p = reviewPrefixes("me", teams);
+    assert.ok(p.queue.includes("sort:updated-desc"));
+    assert.ok(p.waiting.includes("sort:updated-desc"));
+    const repos = Array.from({ length: 30 }, (_, i) => `SomeOrganization/some-repository-${i}`);
+    for (const q of buildSearchQueries(repos, p.waiting)) assert.ok(q.length <= 256, q);
+  }
+});
+
+test("review list requests issueCount and reports truncation", async () => {
+  const pr = (n) => ({ id: `P${n}`, number: n, updatedAt: "2026-01-01T00:00:00Z", repository: { nameWithOwner: "o/r" } });
+  let body;
+  const respond = (data) => async (url, init) => {
+    body = JSON.parse(init.body);
+    return reply(data)();
+  };
+  const settings = { repos: ["o/r"], includeTeams: false };
+  const full = await fetchReviewList("t", "me", settings, respond({
+    q0: { issueCount: 1, nodes: [pr(1)] },
+    w0: { issueCount: 2, nodes: [pr(2), pr(3)] },
+  }));
+  assert.equal(full.truncated, false);
+  assert.match(body.query, /q0: search\([^)]*\) \{ issueCount nodes/);
+  assert.match(body.query, /w0: search\([^)]*\) \{ issueCount nodes/);
+  const cut = await fetchReviewList("t", "me", settings, respond({
+    q0: { issueCount: 1, nodes: [pr(1)] },
+    w0: { issueCount: 120, nodes: [pr(2), pr(3)] },
+  }));
+  assert.equal(cut.truncated, true);
+  const empty = await fetchReviewList("t", "me", { repos: [], includeTeams: false }, async () => {
+    throw new Error("network must not be called");
+  });
+  assert.equal(empty.truncated, false);
+});
+
 test("review list puts a PR in the queue only, never in both", async () => {
   const pr = { id: "P1", number: 5, updatedAt: "2026-01-01T00:00:00Z", repository: { nameWithOwner: "o/r" } };
   const fetchImpl = reply({

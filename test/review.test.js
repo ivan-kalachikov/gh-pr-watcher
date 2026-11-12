@@ -145,6 +145,19 @@ test("team requests count only with includeTeams", () => {
   assert.equal(norm(n, { includeTeams: true }).requestedAt, "2026-11-06T00:00:00Z");
 });
 
+test("requestedNow comes from current review requests, not the request history", () => {
+  const asks = (...reviewers) => ({ reviewRequests: { nodes: reviewers.map((r) => ({ requestedReviewer: r })) } });
+  assert.equal(norm().requestedNow, false);
+  assert.equal(norm({ reviewRequests: undefined }).requestedNow, false);
+  assert.equal(norm(asks({ login: "IVAN" })).requestedNow, true, "user request, case-insensitive");
+  assert.equal(norm(asks({ login: "bob" })).requestedNow, false);
+  assert.equal(norm(asks({ slug: "core" })).requestedNow, false, "team request without includeTeams");
+  assert.equal(norm(asks({ slug: "core" }), { includeTeams: true }).requestedNow, true);
+  assert.equal(norm(asks({ login: "bob" }, { slug: "core" }), { includeTeams: true }).requestedNow, true);
+  // a past request event alone does not mean I am requested now
+  assert.equal(norm({ timelineItems: { nodes: [request("2026-11-06T00:00:00Z")] } }).requestedNow, false);
+});
+
 test("threads split into resolved, answered and unanswered", () => {
   const t = (isResolved, login) => ({ isResolved, comments: { nodes: [{ author: { __typename: "User", login }, }] } });
   const pr = norm({

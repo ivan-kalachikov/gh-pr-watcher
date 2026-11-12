@@ -3,7 +3,14 @@ import { fetchViewer, fetchPullRequests, fetchReviewList, fetchReviewDetails } f
 import { diffPullRequests, markRead, markAllRead, totalUnread } from "./lib/diff.js";
 import { describeChange, describeReviewRequest } from "./lib/format.js";
 import { normalizeReviewPr } from "./lib/review.js";
-import { EMPTY_REVIEW_STATE, needsDetails, diffReviewQueue, reposKey, pruneIgnored } from "./lib/review-state.js";
+import {
+  EMPTY_REVIEW_STATE,
+  needsDetails,
+  diffReviewQueue,
+  reposKey,
+  pruneIgnored,
+  assembleReviewLists,
+} from "./lib/review-state.js";
 
 const ALARM = "poll";
 const EMPTY_STATE = { prs: {}, viewer: null, lastCheck: null, lastError: null, rateLimit: null, warnings: [] };
@@ -45,7 +52,11 @@ function serial(fn) {
 }
 
 async function updateBadge(state) {
-  const error = state.lastError;
+  const { review } = await getSettings();
+  // A review-only setup (no «Мои PR» repos, some review repos) is not an error worth a red "!".
+  const reviewOnly =
+    state.lastError?.kind === "setup" && state.lastError.message === SETUP_MINE && review.repos.length > 0;
+  const error = reviewOnly ? null : state.lastError;
   if (error && (error.kind === "auth" || error.kind === "setup")) {
     await chrome.action.setBadgeText({ text: "!" });
     await chrome.action.setBadgeBackgroundColor({ color: COLOR_ALERT });
@@ -139,17 +150,12 @@ async function pollReview(settings, viewer, prev) {
       }
     }
 
-    const queue = {};
-    for (const item of list.queue) if (details[item.key]) queue[item.key] = details[item.key].pr;
-    const waiting = {};
-    for (const item of list.waiting) {
-      const pr = details[item.key]?.pr;
-      if (pr && !queue[item.key] && pr.myLastReviewAt && pr.myLastReviewState !== "APPROVED") waiting[item.key] = pr;
-    }
+    const { queue, waiting } = assembleReviewLists(list, details);
 
     const { changes } = diffReviewQueue({ ...prev, baselined }, queue, settings);
     const ignoredBefore = await getReviewIgnored();
-    const ignored = pruneIgnored(ignoredBefore, queue, waiting);
+    // A capped search may have left hidden PRs out of the lists while they are still open.
+    const ignored = pruneIgnored(ignoredBefore, queue, waiting, { truncated: list.truncated });
     if (Object.keys(ignored).length !== Object.keys(ignoredBefore).length) {
       await chrome.storage.local.set({ reviewIgnored: ignored });
     }
@@ -192,7 +198,9 @@ function poll() {
       const lastError = { kind: e.kind ?? "api", message: e.message };
       await setState({
         ...state,
-        lastError: settings.repos.length ? lastError : { kind: "setup", message: SETUP_MINE },
+        // An auth error outranks the empty-repos hint, so the badge keeps its "!".
+        lastError:
+          settings.repos.length || lastError.kind === "auth" ? lastError : { kind: "setup", message: SETUP_MINE },
       });
       await chrome.storage.local.set({
         reviewState: {
@@ -212,7 +220,10 @@ function poll() {
     if (settings.review.repos.length) {
       await pollReview(settings, viewer, review);
     } else {
-      await chrome.storage.local.set({ reviewState: { ...review, lastError: { kind: "setup", message: SETUP_REVIEW } } });
+      // Start over: re-adding the same repos later must baseline silently, not report every request since.
+      await chrome.storage.local.set({
+        reviewState: { ...EMPTY_REVIEW_STATE, lastError: { kind: "setup", message: SETUP_REVIEW } },
+      });
     }
   });
 }

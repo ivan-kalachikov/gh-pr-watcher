@@ -167,7 +167,9 @@ $("folder-repo").addEventListener("input", () => ($("folder-error").hidden = tru
 
 // Hidden review PRs, kept live from storage.
 function renderHidden(ignored) {
-  const rows = Object.entries(ignored ?? {}).sort(([, a], [, b]) => (b.ignoredAt ?? 0) - (a.ignoredAt ?? 0));
+  const rows = Object.entries(ignored ?? {}).sort(
+    ([, a], [, b]) => (Date.parse(b.ignoredAt) || 0) - (Date.parse(a.ignoredAt) || 0),
+  );
   $("hidden-card").hidden = rows.length === 0;
   $("hidden-list").innerHTML = rows
     .map(([key, pr]) => {

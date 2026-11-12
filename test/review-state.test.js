@@ -6,6 +6,7 @@ import {
   diffReviewQueue,
   reposKey,
   pruneIgnored,
+  assembleReviewLists,
 } from "../lib/review-state.js";
 
 const pr = (key, over = {}) => ({ key, requestedAt: "2026-11-01T10:00:00Z", myLastReviewAt: null, ...over });
@@ -51,6 +52,16 @@ test("re-request notifies when requestedAt moves forward", () => {
   assert.deepEqual(fresh.map((c) => c.kind), ["rerequested"]);
 });
 
+test("no re-request notice when the request is not newer than my last review", () => {
+  const reviewedAfter = { requestedAt: "2026-11-01T10:00:00Z", myLastReviewAt: "2026-11-03T00:00:00Z" };
+  // a reviewed PR coming back to the queue without a new request event
+  assert.deepEqual(diffReviewQueue(state({}), queueOf(pr("a/b#1", reviewedAfter)), settings(true, true)).changes, []);
+  const sameInstant = { requestedAt: "2026-11-03T00:00:00Z", myLastReviewAt: "2026-11-03T00:00:00.000Z" };
+  assert.deepEqual(diffReviewQueue(state({}), queueOf(pr("a/b#1", sameInstant)), settings(true, true)).changes, []);
+  const prev = state(queueOf(pr("a/b#1", { requestedAt: "2026-10-01T00:00:00Z", myLastReviewAt: "2026-11-03T00:00:00Z" })));
+  assert.deepEqual(diffReviewQueue(prev, queueOf(pr("a/b#1", reviewedAfter)), settings(true, true)).changes, []);
+});
+
 test("ignored PR returns on a newer review request, not on new commits", () => {
   const ignoredAt = "2026-11-05T00:00:00Z";
   const entry = { ignoredAt, title: "t", url: "u", repo: "a/b", number: 1 };
@@ -63,6 +74,14 @@ test("ignored PR returns on a newer review request, not on new commits", () => {
   assert.deepEqual(Object.keys(out), ["a/b#1"]);
   const noRequest = pruneIgnored(ignored, queueOf(pr("a/b#1", { requestedAt: null })), {});
   assert.deepEqual(Object.keys(noRequest), ["a/b#1"]);
+});
+
+test("a truncated search keeps ignored PRs it did not see, but a new request still returns them", () => {
+  const entry = { ignoredAt: "2026-11-05T00:00:00Z", title: "t", url: "u", repo: "a/b", number: 1 };
+  const ignored = { "a/b#1": entry, "a/b#2": entry };
+  const queue = queueOf(pr("a/b#2", { requestedAt: "2026-11-06T00:00:00Z" }));
+  assert.deepEqual(Object.keys(pruneIgnored(ignored, queue, {}, { truncated: true })), ["a/b#1"]);
+  assert.deepEqual(Object.keys(pruneIgnored(ignored, queue, {}, { truncated: false })), []);
 });
 
 test("ignored PR that is gone from both lists is pruned", () => {
@@ -89,4 +108,31 @@ test("reposKey is order and case insensitive and includes includeTeams", () => {
   assert.equal(a, reposKey({ repos: ["BAZ/qux", "foo/bar"], includeTeams: false }));
   assert.notEqual(a, reposKey({ repos: ["baz/qux", "foo/bar"], includeTeams: true }));
   assert.notEqual(a, reposKey({ repos: ["baz/qux"], includeTeams: false }));
+});
+
+test("assembleReviewLists trusts current review requests over a stale search index", () => {
+  const d = (p) => ({ pr: p, fetchedAt: 0 });
+  const reviewed = { myLastReviewAt: "2026-11-05T00:00:00Z", myLastReviewState: "CHANGES_REQUESTED" };
+  const details = {
+    "a/b#1": d(pr("a/b#1", { requestedNow: true })),
+    // just reviewed: search still says requested, reviewRequests no longer has me
+    "a/b#2": d(pr("a/b#2", { ...reviewed, requestedNow: false })),
+    // just approved and the index is stale: shown nowhere
+    "a/b#3": d(pr("a/b#3", { ...reviewed, myLastReviewState: "APPROVED", requestedNow: false })),
+    // request removed before I ever reviewed: shown nowhere
+    "a/b#4": d(pr("a/b#4", { requestedNow: false })),
+    "a/b#5": d(pr("a/b#5", { ...reviewed, requestedNow: false })),
+    "a/b#6": d(pr("a/b#6", { ...reviewed, myLastReviewState: "APPROVED" })),
+    // cached before requestedNow existed: trust the search
+    "a/b#7": d(pr("a/b#7")),
+  };
+  const item = (key) => ({ id: key, key, updatedAt: "x" });
+  const list = {
+    queue: ["a/b#1", "a/b#2", "a/b#3", "a/b#4", "a/b#7", "a/b#9"].map(item),
+    waiting: ["a/b#5", "a/b#6", "a/b#8"].map(item),
+  };
+  const { queue, waiting } = assembleReviewLists(list, details);
+  assert.deepEqual(Object.keys(queue), ["a/b#1", "a/b#7"]);
+  assert.deepEqual(Object.keys(waiting), ["a/b#2", "a/b#5"]);
+  assert.equal(queue["a/b#1"], details["a/b#1"].pr);
 });
