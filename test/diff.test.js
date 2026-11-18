@@ -124,6 +124,69 @@ test("PRs that are no longer open are dropped", () => {
   assert.deepEqual(Object.keys(second.prs), ["o/r#1"]);
 });
 
+const inThread = (id, thread, at, author = "bob") => comment(id, author, { thread, at });
+const T0 = "2026-01-01T00:00:00Z";
+const T1 = "2026-01-01T01:00:00Z";
+const T2 = "2026-01-01T02:00:00Z";
+
+function poll(prev, overrides) {
+  return run(prev, [pr(overrides)]);
+}
+
+test("a thread comment stops being unread once you reply in that thread", () => {
+  const base = poll({}, {}).prs;
+  const events = [inThread("c1", "th1", T0), inThread("c2", "th2", T0)];
+  const reviewed = poll(base, { events });
+  assert.equal(reviewed.prs["o/r#1"].unread.comments, 2);
+
+  const replied = poll(reviewed.prs, { events, viewerActivity: { lastAt: T1, threads: { th1: T1 } } });
+  assert.equal(replied.prs["o/r#1"].unread.comments, 1, "the other thread is still unanswered");
+  assert.deepEqual(replied.changes, []);
+});
+
+test("resolving a thread clears its comments", () => {
+  const base = poll({}, {}).prs;
+  const events = [inThread("c1", "th1", T0), inThread("c2", "th1", T0, "carol")];
+  const reviewed = poll(base, { events });
+  const resolved = poll(reviewed.prs, { events, resolvedThreads: ["th1"] });
+  assert.equal(totalUnread(resolved.prs), 0);
+});
+
+test("a comment newer than your reply stays unread", () => {
+  const base = poll({}, {}).prs;
+  const events = [inThread("c1", "th1", T0), inThread("c2", "th1", T2)];
+  const out = poll(base, { events, viewerActivity: { lastAt: T1, threads: { th1: T1 } } });
+  assert.equal(out.prs["o/r#1"].unread.comments, 1);
+  assert.deepEqual(
+    out.changes[0].events.map((e) => e.id),
+    ["c2"],
+    "an already answered comment is not notified",
+  );
+});
+
+test("top-level comments and reviews clear after any later activity of yours", () => {
+  const base = poll({}, {}).prs;
+  const events = [comment("c1", "bob", { at: T0 }), { ...comment("r1", "alice", { at: T0 }), kind: "approved" }];
+  const reviewed = poll(base, { events });
+  assert.equal(totalUnread(reviewed.prs), 2);
+  const answered = poll(reviewed.prs, { events, viewerActivity: { lastAt: T1, threads: { other: T1 } } });
+  assert.equal(totalUnread(answered.prs), 0);
+});
+
+test("counters stored before this change are rebuilt from the newest events", () => {
+  const events = [inThread("c1", "th1", T0), inThread("c2", "th2", T0), inThread("c3", "th3", T0)];
+  const legacy = {
+    "o/r#1": { ...pr(), seen: ["c1", "c2", "c3"], unread: { comments: 2, approvals: 0, changes: 0, ci: null } },
+  };
+  const untouched = poll(legacy, { events });
+  assert.deepEqual(
+    untouched.prs["o/r#1"].pending.map((p) => p.id),
+    ["c2", "c3"],
+  );
+  const answered = poll(legacy, { events, viewerActivity: { lastAt: T1, threads: { th2: T1, th3: T1 } } });
+  assert.equal(totalUnread(answered.prs), 0);
+});
+
 test("markRead and markAllRead reset unread counters", () => {
   const first = run({}, [pr(), pr({ key: "o/r#2", number: 2 })]).prs;
   const second = run(first, [

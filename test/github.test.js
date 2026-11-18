@@ -65,11 +65,22 @@ const node = {
   reviewThreads: {
     nodes: [
       {
+        id: "TH1",
+        isResolved: false,
         comments: {
           nodes: [
             { id: "T1", url: "t1", createdAt: "2026-01-01T00:10:00Z", state: "SUBMITTED", author: { __typename: "User", login: "bob" } },
             { id: "T2", url: "t2", createdAt: "2026-01-01T00:20:00Z", state: "PENDING", author: { __typename: "User", login: "bob" } },
             { id: "T3", url: "t3", createdAt: "2026-01-01T00:25:00Z", state: "SUBMITTED", author: { __typename: "User", login: "me" } },
+          ],
+        },
+      },
+      {
+        id: "TH2",
+        isResolved: true,
+        comments: {
+          nodes: [
+            { id: "T4", url: "t4", createdAt: "2026-01-01T00:05:00Z", state: "SUBMITTED", author: { __typename: "User", login: "bob" } },
           ],
         },
       },
@@ -83,10 +94,21 @@ test("normalize keeps others' reviews and comments, sorted by time", () => {
   assert.deepEqual(pr.ci, { sha: "abc", state: "SUCCESS" });
   assert.deepEqual(
     pr.events.map((e) => `${e.id}:${e.kind}`),
-    ["T1:comment", "C1:comment", "C2:comment", "R3:comment", "R1:approved"],
+    ["T4:comment", "T1:comment", "C1:comment", "C2:comment", "R3:comment", "R1:approved"],
   );
   assert.equal(pr.events.find((e) => e.id === "C1").isBot, true);
   assert.equal(pr.events.find((e) => e.id === "C2").author, "ghost");
+});
+
+test("normalize records threads, resolved threads and your own latest activity", () => {
+  const pr = normalizePullRequest(node, "me");
+  assert.equal(pr.events.find((e) => e.id === "T1").thread, "TH1");
+  assert.equal(pr.events.find((e) => e.id === "C1").thread, undefined);
+  assert.deepEqual(pr.resolvedThreads, ["TH2"]);
+  assert.deepEqual(pr.viewerActivity, {
+    lastAt: "2026-01-01T04:00:00Z",
+    threads: { TH1: "2026-01-01T00:25:00Z" },
+  });
 });
 
 test("normalize tolerates a PR without commits or checks", () => {
